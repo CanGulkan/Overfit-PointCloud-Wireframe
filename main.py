@@ -40,7 +40,7 @@ if __name__ == "__main__":
     print("STARTING OVERTRAINING ON SINGLE EXAMPLE")
     print("="*50)
     
-    model, loss_history = train_overfit_model(dataset, num_epochs=1000, learning_rate=0.003)
+    model, loss_history = train_overfit_model(dataset, num_epochs=600, learning_rate=0.003)
     
     print("\n" + "="*50)
     print("EVALUATING TRAINED MODEL")
