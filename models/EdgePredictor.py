@@ -1,11 +1,11 @@
 import torch
 import torch.nn as nn
 
-class EdgePredictorExplicit(nn.Module):
+class EdgePredictor(nn.Module):
     """Predict edge connectivity between vertices, without using nn.Sequential."""
     
     def __init__(self, vertex_dim=3, hidden_dim=128):
-        super(EdgePredictorExplicit, self).__init__()
+        super(EdgePredictor, self).__init__()
         
         # First linear layer + activation + dropout
         self.fc1      = nn.Linear(vertex_dim * 2, hidden_dim)

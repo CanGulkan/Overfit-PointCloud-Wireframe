@@ -2,7 +2,7 @@
 import torch.nn as nn
 from models.EdgePredictor import EdgePredictor
 from models.PointNetEncoder import PointNetEncoder
-from models.VertexPredictor import VertexPredictor
+from models.VertexPredictor import VertexPredictorExplicit
 
 
 class PointCloudToWireframe(nn.Module):
@@ -17,7 +17,7 @@ class PointCloudToWireframe(nn.Module):
         self.encoder = PointNetEncoder(input_dim=input_dim)
         
         # Vertex predictor
-        self.vertex_predictor = VertexPredictor(
+        self.vertex_predictor = VertexPredictorExplicit(
             global_feature_dim=512, 
             num_vertices=num_vertices
         )
