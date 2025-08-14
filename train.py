@@ -42,10 +42,7 @@ def create_edge_labels_from_adjacency(adj_matrix, edge_indices):
             
     return edge_labels
 
-
-
-
-def train_overfit_model(dataset, num_epochs=5000, learning_rate=0.001):
+def train_model(dataset, num_epochs=5000, learning_rate=0.001):
     """Train model to overfit on single example"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Training on device: {device}")

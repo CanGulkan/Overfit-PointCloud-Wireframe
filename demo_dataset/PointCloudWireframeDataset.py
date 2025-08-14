@@ -4,7 +4,8 @@ from sklearn.neighbors import NearestNeighbors
 import logging
 
 
-logging.basicConfig(level=logging.INFO)
+# Reduce logging verbosity - only show warnings and errors
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 class PointCloudWireframeDataset:
@@ -78,33 +79,58 @@ class PointCloudWireframeDataset:
         return self.edge_adjacency_matrix
     
     def normalize_data(self):
-        """Normalize point cloud and vertex coordinates"""
+        """Normalize point cloud and vertex coordinates to prevent huge loss values"""
         if self.point_cloud is None:
             raise ValueError("Must load point cloud first")
             
-        # Normalize spatial coordinates (X, Y, Z)
+        # Normalize spatial coordinates (X, Y, Z) to [-1, 1] range
         spatial_coords = self.point_cloud[:, :3]
-        self.spatial_scaler = StandardScaler()
-        normalized_spatial = self.spatial_scaler.fit_transform(spatial_coords)
+        spatial_min = spatial_coords.min(axis=0)
+        spatial_max = spatial_coords.max(axis=0)
+        spatial_range = spatial_max - spatial_min
+        
+        # Avoid division by zero
+        spatial_range = np.where(spatial_range == 0, 1.0, spatial_range)
+        
+        # Normalize to [-1, 1] range
+        normalized_spatial = 2.0 * (spatial_coords - spatial_min) / spatial_range - 1.0
         
         # Normalize color values (R, G, B, A) to [0, 1]
         color_vals = self.point_cloud[:, 3:7] / 255.0
         
-        # Normalize intensity
+        # Normalize intensity to [0, 1] range
         intensity = self.point_cloud[:, 7:8]
-        self.intensity_scaler = StandardScaler()
-        normalized_intensity = self.intensity_scaler.fit_transform(intensity)
+        intensity_min = intensity.min()
+        intensity_max = intensity.max()
+        intensity_range = intensity_max - intensity_min
+        if intensity_range > 0:
+            normalized_intensity = (intensity - intensity_min) / intensity_range
+        else:
+            normalized_intensity = intensity * 0.0  # Set to 0 if no variation
         
         # Combine normalized features
         self.normalized_point_cloud = np.hstack([
             normalized_spatial, color_vals, normalized_intensity
         ])
         
-        # Normalize vertex coordinates using same spatial scaler
+        # Normalize vertex coordinates using same spatial normalization
         if self.vertices is not None:
-            self.normalized_vertices = self.spatial_scaler.transform(self.vertices)
+            # Use the same spatial normalization as point cloud
+            normalized_vertices = 2.0 * (self.vertices - spatial_min) / spatial_range - 1.0
+            self.normalized_vertices = normalized_vertices
+        
+        # Store normalization parameters for later use
+        self.normalization_params = {
+            'spatial_min': spatial_min,
+            'spatial_max': spatial_max,
+            'spatial_range': spatial_range,
+            'intensity_min': intensity_min,
+            'intensity_max': intensity_max
+        }
         
         logger.info("Data normalization completed")
+        logger.info(f"Spatial range: [{spatial_min.min():.3f}, {spatial_max.max():.3f}] -> [-1, 1]")
+        logger.info(f"Intensity range: [{intensity_min:.3f}, {intensity_max:.3f}] -> [0, 1]")
         return self.normalized_point_cloud
     
     def find_nearest_points_to_vertices(self, k=5):
