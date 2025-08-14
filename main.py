@@ -1,8 +1,7 @@
 import torch
 from demo_dataset.PointCloudWireframeDataset import PointCloudWireframeDataset
-from train import evaluate_model, train_model 
-from train_multiple import train_models, make_pcwf_collate
-
+from train_multiple import train_model, find_matching_files, split_data_into_train_test, create_data_collator, evaluate_model
+from demo_dataset.MultiPairPCWF import MultiPairPCWF
 import os
 import glob
 import random
@@ -92,8 +91,8 @@ class PairListDataset(Dataset):
 def load_datasets(
     points_dir: str = "demo_dataset/pointcloud",
     wire_dir: str = "demo_dataset/wireframe",
-    train_n: Optional[int] = 20,
-    test_n: Optional[int] = 5,
+    train_n: Optional[int] = 4,
+    test_n: Optional[int] = 2,
     seed: int = 42,
     k_nearest: int = 10
 ) -> Tuple[PairListDataset, PairListDataset, List[Tuple[str, str]], List[Tuple[str, str]]]:
@@ -103,7 +102,7 @@ def load_datasets(
 
 def create_dataloaders(train_ds, test_ds, batch_size=4, num_workers=0, shuffle=True, cap_num_vertices=60):
     """Create dataloaders with proper collate function for variable vertex counts."""
-    collate_fn = make_pcwf_collate(cap_num_vertices)
+    collate_fn = create_data_collator(cap_num_vertices)
     return (
         DataLoader(train_ds, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, collate_fn=collate_fn),
         DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=collate_fn)
@@ -122,152 +121,149 @@ def load_and_preprocess_data_single():
     return dataset
 
 # ───────────────────────── main ─────────────────────────
-
 if __name__ == "__main__":
-    # Configuration
+    import os
+    import torch
+    import logging
+    from torch.utils.data import DataLoader
+
+    # ───────────────────────── Config ─────────────────────────
     CAP_NUM_VERTICES = 60
-    BATCH_SIZE = 2  # Reduced batch size for small dataset
-    NUM_EPOCHS = 100  # Reduced epochs for small dataset
-    LEARNING_RATE = 1e-5  # Conservative learning rate for stability
-    
-    print(f"Configuration:")
+    BATCH_SIZE = 2           # Small batch for small data
+    NUM_EPOCHS = 100         # Few epochs for small data
+    LEARNING_RATE = 1e-5     # Conservative LR for stability
+
+    print("Configuration:")
     print(f"  Max vertices per sample: {CAP_NUM_VERTICES}")
     print(f"  Batch size: {BATCH_SIZE}")
     print(f"  Number of epochs: {NUM_EPOCHS}")
     print(f"  Learning rate: {LEARNING_RATE}")
-    
-    print(f"\nLoading datasets...")
-    train_ds, test_ds, train_pairs, test_pairs = load_datasets(
+
+    # ───────────────────────── Data finding/splitting ─────────────────────────
+    print("\nLoading datasets (pairing .xyz ↔ .obj)...")
+    pairs = find_paired_files(
         points_dir="demo_dataset/pointcloud",
-        wire_dir="demo_dataset/wireframe",
-        train_n=3,
-        test_n=2,
-        seed=42,
-        k_nearest=10
+        wire_dir="demo_dataset/wireframe"
+    )
+    train_pairs, test_pairs = select_train_test_pairs(
+        pairs, train_n=3, test_n=2, seed=42, shuffle=True
     )
 
-    print(f"\nDataset loaded:")
+    print("\nDataset loaded:")
     print(f"  Training pairs: {len(train_pairs)}")
     print(f"  Test pairs: {len(test_pairs)}")
 
-    # Check data normalization
-    first = train_ds[0]
-    print(f"\nSample data shapes and ranges:")
-    print(f"  Point cloud: {first['point_cloud'].shape}")
-    print(f"    Range: [{first['point_cloud'].min():.3f}, {first['point_cloud'].max():.3f}]")
-    print(f"  Vertices: {first['vertices'].shape}")
-    print(f"    Range: [{first['vertices'].min():.3f}, {first['vertices'].max():.3f}]")
-    print(f"  Adjacency matrix: {first['adjacency'].shape}")
-    print(f"    Non-zero elements: {(first['adjacency'] > 0).sum().item()}")
-    if 'normalized_point_cloud' in first:
-        print(f"  Normalized point cloud: {first['normalized_point_cloud'].shape}")
-        print(f"    Range: [{first['normalized_point_cloud'].min():.3f}, {first['normalized_point_cloud'].max():.3f}]")
-    
-    # Validate data ranges
-    pc_range = first['point_cloud'].abs().max().item()
-    v_range = first['vertices'].abs().max().item()
-    
+    # ───────────────────────── Quick data health check ─────────────────────────
+    # Range/shape checks from old main, done by loading and normalizing a single example directly from file
+    if len(train_pairs) == 0:
+        raise RuntimeError("No training pairs found.")
+
+    from demo_dataset.PointCloudWireframeDataset import PointCloudWireframeDataset
+
+    first_xyz, first_obj = train_pairs[0]
+    ds_chk = PointCloudWireframeDataset(first_xyz, first_obj)
+    ds_chk.load_point_cloud()
+    ds_chk.load_wireframe()
+    ds_chk.create_adjacency_matrix()  # Create adjacency matrix
+    ds_chk.normalize_data()  # Should set normalized_point_cloud / normalized_vertices / edge_adjacency_matrix
+
+    import numpy as np
+    print("\nSample data shapes and ranges (from first training sample):")
+    print(f"  Point cloud: {ds_chk.normalized_point_cloud.shape}")
+    print(f"    Range: [{np.min(ds_chk.normalized_point_cloud):.3f}, {np.max(ds_chk.normalized_point_cloud):.3f}]")
+    print(f"  Vertices: {ds_chk.normalized_vertices.shape}")
+    print(f"    Range: [{np.min(ds_chk.normalized_vertices):.3f}, {np.max(ds_chk.normalized_vertices):.3f}]")
+
+    # Range warnings
+    pc_range = float(np.abs(ds_chk.normalized_point_cloud).max())
+    v_range = float(np.abs(ds_chk.normalized_vertices).max())
     if pc_range > 10.0:
         print(f"⚠️  WARNING: Point cloud range is very large ({pc_range:.3f}). This may cause training issues.")
     if v_range > 10.0:
         print(f"⚠️  WARNING: Vertex range is very large ({v_range:.3f}). This may cause training issues.")
-    
     if pc_range <= 2.0 and v_range <= 2.0:
-        print(f"✅ Data ranges look good for training.")
+        print("✅ Data ranges look good for training.")
     else:
-        print(f"❌ Data ranges may cause training instability. Consider checking normalization.")
+        print("❌ Data ranges may cause training instability. Consider checking normalization.")
 
-    print(f"\nCreating dataloaders...")
-    train_loader, test_loader = create_dataloaders(
-        train_ds, test_ds, 
-        batch_size=BATCH_SIZE, 
-        cap_num_vertices=CAP_NUM_VERTICES
+    # ───────────────────────── Sanity check: single batch forward ─────────────────────────
+    # Single batch model test from old main, using our collate function
+    print("\nCreating a tiny loader for a single-batch model test...")
+    tmp_count = min(max(1, BATCH_SIZE), len(train_pairs))
+    tmp_ds = MultiPairPCWF(train_pairs[:tmp_count])
+    tmp_loader = DataLoader(
+        tmp_ds,
+        batch_size=tmp_count,
+        shuffle=False,
+        collate_fn=create_data_collator(CAP_NUM_VERTICES)
     )
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"\nUsing device: {device}")
 
-    # Test the model with a single batch before training
-    print(f"\nTesting model with single batch...")
+    print("\nTesting model with single batch...")
     from models.PointCloudToWireframe import PointCloudToWireframe
-    
     test_model = PointCloudToWireframe(input_dim=8, num_vertices=CAP_NUM_VERTICES).to(device)
     test_model.eval()
-    
     with torch.no_grad():
-        for test_batch in train_loader:
+        for test_batch in tmp_loader:
             pc = test_batch['point_cloud'].to(device)
             preds = test_model(pc)
-            
-            print(f"  Model test successful:")
+            print("  Model test successful:")
             print(f"    Input shape: {pc.shape}")
             print(f"    Predicted vertices: {preds['vertices'].shape}")
             print(f"    Edge probabilities: {preds['edge_probs'].shape}")
             print(f"    Edge indices: {len(preds['edge_indices'])}")
-            
-            # Check prediction ranges
-            v_pred_range = preds['vertices'].abs().max().item()
-            e_pred_range = preds['edge_probs'].abs().max().item()
-            print(f"    Vertex prediction range: [{preds['vertices'].min().item():.3f}, {preds['vertices'].max().item():.3f}]")
-            print(f"    Edge prediction range: [{preds['edge_probs'].min().item():.3f}, {preds['edge_probs'].max().item():.3f}]")
-            
-            if v_pred_range > 10.0:
-                print(f"⚠️  WARNING: Vertex predictions have large range ({v_pred_range:.3f})")
-            if e_pred_range > 1.0:
-                print(f"⚠️  WARNING: Edge predictions exceed [0,1] range ({e_pred_range:.3f})")
-            
-            break
-    
-    print(f"Model test completed!")
 
+            v_pred_min = preds['vertices'].min().item()
+            v_pred_max = preds['vertices'].max().item()
+            e_pred_min = preds['edge_probs'].min().item()
+            e_pred_max = preds['edge_probs'].max().item()
+            print(f"    Vertex prediction range: [{v_pred_min:.3f}, {v_pred_max:.3f}]")
+            print(f"    Edge prediction range: [{e_pred_min:.3f}, {e_pred_max:.3f}]")
+            if abs(v_pred_max) > 10.0 or abs(v_pred_min) > 10.0:
+                print(f"⚠️  WARNING: Vertex predictions have large range.")
+            if e_pred_max > 1.0 or e_pred_min < 0.0:
+                print(f"⚠️  WARNING: Edge predictions exceed [0,1] range.")
+            break
+    print("Model test completed!")
+
+    # ───────────────────────── Training ─────────────────────────
     print("\n" + "="*50)
-    
     print("STARTING TRAINING")
     print("="*50)
 
-    model, loss_hist, rmse_hist = train_models(
-        train_loader=train_loader,
-        cap_num_vertices=CAP_NUM_VERTICES,
+    # Use the simplified training function
+    model = train_model(
+        training_pairs=train_pairs,
         num_epochs=NUM_EPOCHS,
         learning_rate=LEARNING_RATE,
-        device=device
+        max_vertices=CAP_NUM_VERTICES,
+        batch_size=BATCH_SIZE
     )
 
+    # ───────────────────────── Saving ─────────────────────────
     print("\n" + "="*50)
     print("SAVING MODEL")
     print("="*50)
-    torch.save(model.state_dict(), 'trained_model.pth')
+    torch.save(model.state_dict(), "trained_model.pth")
     print("Model saved as 'trained_model.pth'")
-    
-    print(f"\nTraining completed!")
-    print(f"  Final loss: {loss_hist[-1]:.6f}")
-    print(f"  Final RMSE: {rmse_hist[-1]:.6f}")
-    print(f"  Best RMSE: {min(rmse_hist):.6f}")
-    
-    # Plot training curves if matplotlib is available
-    try:
-        import matplotlib.pyplot as plt
-        
-        plt.figure(figsize=(12, 4))
-        
-        plt.subplot(1, 2, 1)
-        plt.plot(loss_hist)
-        plt.title('Training Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.yscale('log')  # Log scale for better visualization
-        
-        plt.subplot(1, 2, 2)
-        plt.plot(rmse_hist)
-        plt.title('Vertex RMSE')
-        plt.xlabel('Epoch')
-        plt.ylabel('RMSE')
-        plt.yscale('log')  # Log scale for better visualization
-        
-        plt.tight_layout()
-        plt.savefig('training_curves.png', dpi=150, bbox_inches='tight')
-        plt.show()
-        print("Training curves saved as 'training_curves.png'")
-        
-    except ImportError:
-        print("Matplotlib not available - skipping training curve plots")
+
+    # ───────────────────────── Quick test evaluation (optional) ─────────────────────────
+    # Evaluate model on test samples
+    if len(test_pairs) > 0:
+        print("\nQuick evaluation on a couple of test samples:")
+        for i, (xyz_path, obj_path) in enumerate(test_pairs[:2]):
+            ds_single = PointCloudWireframeDataset(xyz_path, obj_path)
+            ds_single.load_point_cloud()
+            ds_single.load_wireframe()
+            ds_single.create_adjacency_matrix()  # Create adjacency matrix
+            ds_single.normalize_data()
+            results = evaluate_model(model, ds_single, device)
+            name = os.path.splitext(os.path.basename(obj_path))[0]
+            print(f"  [TEST:{name}] "
+                  f"RMSE={results['vertex_rmse']:.4f} | "
+                  f"Edge Acc={results['edge_accuracy']:.3f} | "
+                  f"F1={results['edge_f1_score']:.3f}")
+
+    print("\nTraining completed!")

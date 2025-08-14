@@ -33,7 +33,7 @@ class PointCloudWireframeDataset:
                     intensity = float(parts[7])
                     data.append([x, y, z, r, g, b, a, intensity])
         
-        self.point_cloud = np.array(data)
+        self.point_cloud = np.array(data, dtype=np.float32)
         logger.info(f"Loaded {len(self.point_cloud)} points")
         return self.point_cloud
     
@@ -57,8 +57,8 @@ class PointCloudWireframeDataset:
                     v1, v2 = int(parts[1]) - 1, int(parts[2]) - 1
                     edges.append([v1, v2])
         
-        self.vertices = np.array(vertices)
-        self.edges = np.array(edges)
+        self.vertices = np.array(vertices, dtype=np.float32)
+        self.edges = np.array(edges, dtype=np.int32)
         
         logger.info(f"Loaded {len(self.vertices)} vertices and {len(self.edges)} edges")
         return self.vertices, self.edges
@@ -69,12 +69,12 @@ class PointCloudWireframeDataset:
             raise ValueError("Must load wireframe data first")
             
         n_vertices = len(self.vertices)
-        self.edge_adjacency_matrix = np.zeros((n_vertices, n_vertices))
+        self.edge_adjacency_matrix = np.zeros((n_vertices, n_vertices), dtype=np.float32)
         
         for edge in self.edges:
             v1, v2 = edge[0], edge[1]
-            self.edge_adjacency_matrix[v1, v2] = 1
-            self.edge_adjacency_matrix[v2, v1] = 1  # Undirected graph
+            self.edge_adjacency_matrix[v1, v2] = 1.0
+            self.edge_adjacency_matrix[v2, v1] = 1.0  # Undirected graph
             
         return self.edge_adjacency_matrix
     
@@ -111,13 +111,13 @@ class PointCloudWireframeDataset:
         # Combine normalized features
         self.normalized_point_cloud = np.hstack([
             normalized_spatial, color_vals, normalized_intensity
-        ])
+        ]).astype(np.float32)
         
         # Normalize vertex coordinates using same spatial normalization
         if self.vertices is not None:
             # Use the same spatial normalization as point cloud
             normalized_vertices = 2.0 * (self.vertices - spatial_min) / spatial_range - 1.0
-            self.normalized_vertices = normalized_vertices
+            self.normalized_vertices = normalized_vertices.astype(np.float32)
         
         # Store normalization parameters for later use
         self.normalization_params = {
